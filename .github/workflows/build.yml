@@ -104,16 +104,17 @@ jobs:
         run: |
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           export STAGING_DIR="$PWD/openwrt-sdk/staging_dir"
-          mkdir -p "$PWD/target-zlib"
+          ZLIB_PREFIX="$PWD/target-zlib"
+          mkdir -p "$ZLIB_PREFIX"
           cd compat/zlib
           CC=mipsel-openwrt-linux-musl-gcc \
           AR=mipsel-openwrt-linux-musl-ar \
           RANLIB=mipsel-openwrt-linux-musl-ranlib \
-          ./configure --static --prefix="$PWD/../target-zlib"
+          ./configure --static --prefix="$ZLIB_PREFIX"
           make -j"$(nproc)"
-          make install prefix="$PWD/../target-zlib"
+          make install prefix="$ZLIB_PREFIX"
           echo "=== zlib install tree ==="
-          find "$PWD/../target-zlib" -maxdepth 3 -type f | sort | head -50
+          find "$ZLIB_PREFIX" -maxdepth 3 -type f | sort | head -50
 
       - name: Configure and build for HiWiFi2 mipsel
         env:
