@@ -49,6 +49,7 @@ jobs:
           release: false
           install: >-
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-binutils
             mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-zlib
             make
@@ -124,9 +125,11 @@ jobs:
         run: |
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           export STAGING_DIR="$PWD/openwrt-sdk/staging_dir"
-          export CFLAGS="-O2 -s -msoft-float"
-          export LDFLAGS="-L$PWD/target-zlib/lib"
-          ./configure --static --with-openssl=none --with-zlib=tree
+          ./configure --static \
+            --with-openssl=none \
+            --with-zlib="$PWD/target-zlib" \
+            CFLAGS="-O2 -s -msoft-float" \
+            LDFLAGS="-L$PWD/target-zlib/lib"
           make -j"$(nproc)"
           echo "=== Checking shell.o for sqlite3_zipfile_init ==="
           mipsel-openwrt-linux-musl-nm bld/shell.o 2>/dev/null | grep -i zipfile || echo "WARNING: sqlite3_zipfile_init not found in shell.o"
