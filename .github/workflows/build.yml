@@ -1,0 +1,74 @@
+name: Build Fossil
+
+on:
+  push:
+    branches: ["master", "main"]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential tclsh pkg-config libssl-dev zlib1g-dev
+
+      - name: Configure and build
+        run: |
+          ./configure --static CFLAGS='-O2 -s'
+          make -j"$(nproc)"
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp fossil dist/fossil-linux-amd64
+          tar -czf dist/fossil-linux-amd64.tar.gz -C dist fossil-linux-amd64
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fossil-linux-amd64
+          path: dist/fossil-linux-amd64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-zlib
+            make
+            tcl
+
+      - name: Build with MinGW makefile
+        shell: msys2 {0}
+        run: |
+          export PATH="/ucrt64/bin:$PATH"
+          make -f win/Makefile.mingw X64=1 PREFIX=x86_64-w64-mingw32- -j2
+
+      - name: Package binary
+        shell: msys2 {0}
+        run: |
+          mkdir -p dist
+          cp fossil.exe dist/fossil-windows-amd64.exe
+          zip -r dist/fossil-windows-amd64.zip dist/fossil-windows-amd64.exe
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fossil-windows-amd64
+          path: dist/fossil-windows-amd64.zip
