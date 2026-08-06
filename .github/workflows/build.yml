@@ -72,3 +72,50 @@ jobs:
         with:
           name: fossil-windows-amd64
           path: dist/fossil-windows-amd64.zip
+
+  build-hiwifi2-mipsel:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential tclsh pkg-config xz-utils wget
+
+      - name: Install OpenWrt SDK for mt7620
+        run: |
+          wget -q https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7620/openwrt-sdk-23.05.3-ramips-mt7620_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          mkdir -p openwrt-sdk
+          tar xf openwrt-sdk-*.tar.xz -C openwrt-sdk --strip-components=1
+          TOOLCHAIN_DIR=$(find openwrt-sdk/staging_dir -type d -name 'toolchain-*' | head -1)
+          echo "TOOLCHAIN_DIR=$PWD/$TOOLCHAIN_DIR" >> "$GITHUB_ENV"
+          echo "$PWD/$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
+          echo "=== Toolchain dir ==="
+          echo "$PWD/$TOOLCHAIN_DIR"
+          echo "=== Cross compiler candidates ==="
+          ls "$PWD/$TOOLCHAIN_DIR/bin" | grep 'mipsel' | head -20 || true
+
+      - name: Configure and build for HiWiFi2 mipsel
+        env:
+          CC: mipsel-openwrt-linux-musl-gcc
+          AR: mipsel-openwrt-linux-musl-ar
+          RANLIB: mipsel-openwrt-linux-musl-ranlib
+        run: |
+          export CFLAGS='-O2 -s -msoft-float'
+          ./configure --static --with-openssl=none
+          make -j"$(nproc)"
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp fossil dist/fossil-hiwifi2-mipsel
+          tar -czf dist/fossil-hiwifi2-mipsel.tar.gz -C dist fossil-hiwifi2-mipsel
+
+      - name: Upload HiWiFi2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fossil-hiwifi2-mipsel
+          path: dist/fossil-hiwifi2-mipsel.tar.gz
