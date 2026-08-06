@@ -58,7 +58,7 @@ jobs:
         shell: msys2 {0}
         run: |
           export PATH="/ucrt64/bin:$PATH"
-          make -f win/Makefile.mingw X64=1 PREFIX=x86_64-w64-mingw32- -j2
+          make -f win/Makefile.mingw X64=1 -j2
 
       - name: Package binary
         shell: msys2 {0}
