@@ -54,6 +54,7 @@ jobs:
             mingw-w64-ucrt-x86_64-zlib
             make
             tcl
+            zip
 
       - name: Build with MinGW makefile
         shell: msys2 {0}
