@@ -109,9 +109,11 @@ jobs:
           CC=mipsel-openwrt-linux-musl-gcc \
           AR=mipsel-openwrt-linux-musl-ar \
           RANLIB=mipsel-openwrt-linux-musl-ranlib \
-          ./configure --static --host=mipsel-openwrt-linux-musl --prefix="$PWD/../target-zlib"
+          ./configure --static --prefix="$PWD/../target-zlib"
           make -j"$(nproc)"
-          make install
+          make install prefix="$PWD/../target-zlib"
+          echo "=== zlib install tree ==="
+          find "$PWD/../target-zlib" -maxdepth 3 -type f | sort | head -50
 
       - name: Configure and build for HiWiFi2 mipsel
         env:
