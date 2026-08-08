@@ -1,31 +1,91 @@
-name: Build Python3 for 极路由 (mipsel musl soft-float via OpenWrt SDK)
+name: Build Fossil
 
 on:
   push:
-    branches: [ main ]
+    branches: ["master", "main"]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout CPython
-        uses: actions/checkout@v4
-        with:
-          repository: python/cpython
-          ref: v3.11.7
-          path: cpython
 
-      - name: Setup Python 3.11 (for cross compile)
-        uses: actions/setup-python@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential tclsh pkg-config libssl-dev zlib1g-dev
+
+      - name: Configure and build
+        run: |
+          ./configure --static CFLAGS='-O2 -s'
+          make -j"$(nproc)"
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp fossil dist/fossil-linux-amd64
+          tar -czf dist/fossil-linux-amd64.tar.gz -C dist fossil-linux-amd64
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
         with:
-          python-version: '3.11'
+          name: fossil-linux-amd64
+          path: dist/fossil-linux-amd64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-binutils
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-zlib
+            make
+            tcl
+            zip
+
+      - name: Build with MinGW makefile
+        shell: msys2 {0}
+        run: |
+          export PATH="/ucrt64/bin:$PATH"
+          make -f win/Makefile.mingw X64=1 -j2
+
+      - name: Package binary
+        shell: msys2 {0}
+        run: |
+          mkdir -p dist
+          cp fossil.exe dist/fossil-windows-amd64.exe
+          zip -r dist/fossil-windows-amd64.zip dist/fossil-windows-amd64.exe
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fossil-windows-amd64
+          path: dist/fossil-windows-amd64.zip
+
+  build-hiwifi2-mipsel:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install host dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev zlib1g-dev perl \
-            tclsh pkg-config xz-utils wget
+          sudo apt-get install -y build-essential tclsh pkg-config xz-utils wget
 
       - name: Install OpenWrt SDK for mt7620
         run: |
@@ -39,223 +99,52 @@ jobs:
           echo "$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
           echo "=== Toolchain dir ==="
           echo "$TOOLCHAIN_DIR"
-          echo "=== Cross compiler ==="
-          ls "$TOOLCHAIN_DIR/bin" | grep 'mipsel' | head -10 || true
-          echo "=== Check float ABI ==="
-          "$TOOLCHAIN_DIR/bin/mipsel-openwrt-linux-musl-gcc" -dumpmachine || true
+          echo "=== Cross compiler candidates ==="
+          ls "$TOOLCHAIN_DIR/bin" | grep 'mipsel' | head -20 || true
 
-      - name: Cross-compile OpenSSL (static)
+      - name: Build target zlib for mipsel
         run: |
-          cd /tmp
-          curl -L --retry 3 -o openssl.tar.gz \
-            "https://www.openssl.org/source/openssl-3.0.13.tar.gz"
-          tar xzf openssl.tar.gz
-          cd openssl-3.0.13
-          
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           export STAGING_DIR="$PWD/openwrt-sdk/staging_dir"
-          
+          ZLIB_PREFIX="$PWD/target-zlib"
+          mkdir -p "$ZLIB_PREFIX"
+          cd compat/zlib
           CC=mipsel-openwrt-linux-musl-gcc \
-          CXX=mipsel-openwrt-linux-musl-g++ \
           AR=mipsel-openwrt-linux-musl-ar \
           RANLIB=mipsel-openwrt-linux-musl-ranlib \
-          ./Configure linux-mips32 \
-            --prefix=/tmp/openssl-mipsel \
-            threads \
-            no-asm \
-            no-shared no-module no-legacy no-tests no-comp no-zlib no-ssl3 \
-            -static -Os
-          
-          make -j$(nproc)
-          make install_sw
-          
-          CONF_H="/tmp/openssl-mipsel/include/openssl/opensslconf.h"
-          if ! grep -q "OPENSSL_THREADS" "$CONF_H" 2>/dev/null; then
-            echo "Injecting OPENSSL_THREADS into opensslconf.h..."
-            echo "#define OPENSSL_THREADS" >> "$CONF_H"
-          fi
-          echo "=== opensslconf.h OPENSSL_THREADS check ==="
-          grep "OPENSSL_THREADS" "$CONF_H" || true
+          ./configure --static --prefix="$ZLIB_PREFIX"
+          make -j"$(nproc)"
+          make install prefix="$ZLIB_PREFIX"
+          echo "=== zlib install tree ==="
+          find "$ZLIB_PREFIX" -maxdepth 3 -type f | sort | head -50
 
-      - name: Force _ssl & _hashlib as built-in modules
+      - name: Configure and build for HiWiFi2 mipsel
+        env:
+          CC: mipsel-openwrt-linux-musl-gcc
+          AR: mipsel-openwrt-linux-musl-ar
+          RANLIB: mipsel-openwrt-linux-musl-ranlib
         run: |
-          cat > cpython/Modules/Setup.local << 'EOF'
-          *static*
-          _ssl _ssl.c -I/tmp/openssl-mipsel/include -L/tmp/openssl-mipsel/lib -lssl -lcrypto
-          _hashlib _hashopenssl.c -I/tmp/openssl-mipsel/include -L/tmp/openssl-mipsel/lib -lssl -lcrypto
-          EOF
-
-      - name: Configure cross compile
-        run: |
-          cd cpython
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           export STAGING_DIR="$PWD/openwrt-sdk/staging_dir"
-          
-          export CC=mipsel-openwrt-linux-musl-gcc
-          export CXX=mipsel-openwrt-linux-musl-g++
-          export AR=mipsel-openwrt-linux-musl-ar
-          export RANLIB=mipsel-openwrt-linux-musl-ranlib
-          # OpenWrt SDK 默认就是软浮点，不需要 -msoft-float
-          # 保留 -march=mips32 确保指令集兼容 MT7620A
-          export CFLAGS="-Os -static -march=mips32 -mtune=mips32"
-          export CPPFLAGS="-I/tmp/openssl-mipsel/include"
-          export LDFLAGS="-static -L/tmp/openssl-mipsel/lib"
-          export LIBS="-lssl -lcrypto"
-          
-          ./configure \
-            --host=mipsel-openwrt-linux-musl \
-            --build=x86_64-linux-gnu \
-            --prefix=/tmp/python-mipsel \
-            --with-build-python=$(which python3) \
-            --with-openssl=/tmp/openssl-mipsel \
-            --disable-ipv6 \
-            --without-ensurepip \
-            --disable-test-modules \
-            --enable-optimizations=no \
-            ac_cv_file__dev_ptmx=no \
-            ac_cv_file__dev_ptc=no \
-            ac_cv_func_setpgrp_void=yes
+          ./configure --static \
+            --with-openssl=none \
+            --with-zlib="$PWD/target-zlib" \
+            CFLAGS="-O2 -s -msoft-float" \
+            LDFLAGS="-L$PWD/target-zlib/lib"
+          make -j"$(nproc)"
+          echo "=== Checking shell.o for sqlite3_zipfile_init ==="
+          mipsel-openwrt-linux-musl-nm bld/shell.o 2>/dev/null | grep -i zipfile || echo "WARNING: sqlite3_zipfile_init not found in shell.o"
+          echo "=== Checking fossil binary for sqlite3_zipfile_init ==="
+          mipsel-openwrt-linux-musl-nm fossil 2>/dev/null | grep -i zipfile || echo "WARNING: sqlite3_zipfile_init not found in binary"
 
-      - name: Build
+      - name: Package binary
         run: |
-          cd cpython
-          make -j$(nproc)
+          mkdir -p dist
+          cp fossil dist/fossil-hiwifi2-mipsel
+          tar -czf dist/fossil-hiwifi2-mipsel.tar.gz -C dist fossil-hiwifi2-mipsel
 
-      - name: Install & Strip & Fix Symlinks
-        run: |
-          cd cpython
-          make install
-          mipsel-openwrt-linux-musl-strip /tmp/python-mipsel/bin/python3.11
-
-          rm -rf /tmp/python-mipsel/lib/python3.11/test
-          rm -rf /tmp/python-mipsel/lib/python3.11/lib2to3/tests
-          rm -rf /tmp/python-mipsel/lib/python3.11/idlelib
-          rm -rf /tmp/python-mipsel/lib/python3.11/tkinter
-          rm -rf /tmp/python-mipsel/lib/python3.11/turtledemo
-          rm -rf /tmp/python-mipsel/lib/python3.11/ensurepip
-          rm -rf /tmp/python-mipsel/include
-          rm -f /tmp/python-mipsel/lib/python3.11/config-3.11/libpython3.11.a
-
-          cd /tmp/python-mipsel/bin
-          chmod +x python3.11
-          rm -f python3 && ln -s python3.11 python3
-          rm -f 2to3 && ln -s 2to3-3.11 2to3
-          rm -f idle3 && ln -s idle3.11 idle3
-          rm -f pydoc3 && ln -s pydoc3.11 pydoc3
-
-      - name: Verify static link & soft-float
-        run: |
-          echo "=== Checking if python3.11 is statically linked ==="
-          file /tmp/python-mipsel/bin/python3.11
-          readelf -l /tmp/python-mipsel/bin/python3.11 | grep -i "interpreter" || true
-          if readelf -l /tmp/python-mipsel/bin/python3.11 | grep -q "interpreter"; then
-            echo "WARNING: python3.11 is NOT fully static!"
-          else
-            echo "OK: python3.11 appears to be statically linked."
-          fi
-          
-          echo "=== Checking for hard-float instructions ==="
-          if mipsel-openwrt-linux-musl-objdump -d /tmp/python-mipsel/bin/python3.11 | grep -Eq '\s(ldc1|sdc1|add\.s|mul\.s|c\.eq\.s|madd\.s)\s'; then
-            echo "WARNING: Found FPU instructions!"
-          else
-            echo "OK: No FPU instructions found (soft-float confirmed)."
-          fi
-
-      - name: Install pip for target
-        run: |
-          SITE_PACKAGES="/tmp/python-mipsel/lib/python3.11/site-packages"
-          BIN_DIR="/tmp/python-mipsel/bin"
-          BUNDLED_DIR="$GITHUB_WORKSPACE/cpython/Lib/ensurepip/_bundled"
-          
-          mkdir -p "$SITE_PACKAGES"
-          
-          for whl in "$BUNDLED_DIR"/*.whl; do
-            if [ -f "$whl" ]; then
-              echo "Installing $(basename "$whl") ..."
-              python3 -m zipfile -e "$whl" "$SITE_PACKAGES"
-            fi
-          done
-          
-          cat > "$BIN_DIR/pip3.11" << 'SCRIPT'
-          #!/usr/bin/env python3.11
-          # -*- coding: utf-8 -*-
-          import re
-          import sys
-          from pip._internal.cli.main import main
-          if __name__ == '__main__':
-              sys.argv[0] = re.sub(r'(-script\.pyw|\.exe)?$', '', sys.argv[0])
-              sys.exit(main())
-          SCRIPT
-          chmod +x "$BIN_DIR/pip3.11"
-          ln -sf pip3.11 "$BIN_DIR/pip3"
-          ln -sf pip3.11 "$BIN_DIR/pip"
-
-      - name: Pre-install common pure-Python packages
-        run: |
-          TARGET_SITE="/tmp/python-mipsel/lib/python3.11/site-packages"
-          
-          pip install \
-            --no-cache-dir \
-            --target "$TARGET_SITE" \
-            requests \
-            urllib3 \
-            certifi \
-            idna \
-            charset-normalizer \
-            beautifulsoup4 \
-            soupsieve \
-            pytz \
-            python-dateutil \
-            six
-          
-          echo "=== Checking for x86_64 .so files ==="
-          if find "$TARGET_SITE" -name "*.so" -o -name "*.so.*" | grep -q .; then
-            echo "WARNING: Found native .so files! These will NOT run on mipsel:"
-            find "$TARGET_SITE" -name "*.so" -o -name "*.so.*"
-          else
-            echo "OK: No native .so files found."
-          fi
-          
-          echo "=== Installed packages ==="
-          ls -la "$TARGET_SITE"
-
-      - name: Package
-        run: |
-          cd /tmp/python-mipsel
-          tar czf $GITHUB_WORKSPACE/python-mipsel-musl-sf.tar.gz .
-
-      - name: Upload artifact
+      - name: Upload HiWiFi2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: python-mipsel-musl-sf
-          path: python-mipsel-musl-sf.tar.gz
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: python-mipsel-musl-sf
-          path: artifacts
-
-      - name: List artifacts
-        run: ls -la artifacts/
-
-      - name: Create or Update Dev Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="dev-latest"
-          echo "Using fixed version tag: $VERSION"
-          gh release delete "$VERSION" --yes 2>/dev/null || true
-          gh release create "$VERSION" \
-            --title "Development Build (Latest)" \
-            --notes "Automatic build from commit ${{ github.sha }}%0A%0A**Platforms:**%0A- Linux mipsel musl soft-float (极路由 - 完全静态编译)%0A- 使用 OpenWrt SDK (mt7620) 交叉编译%0A- 内置 OpenSSL / 完整 SSL 支持%0A- 软浮点 (无 FPU 设备兼容)%0A- 包含 pip / requests / beautifulsoup4 等" \
-            --prerelease \
-            artifacts/python-mipsel-musl-sf.tar.gz
+          name: fossil-hiwifi2-mipsel
+          path: dist/fossil-hiwifi2-mipsel.tar.gz
